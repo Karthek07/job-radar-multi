@@ -217,8 +217,10 @@ def import_resume(path, cfg):
 
 def setup_search(cfg, resume):
     """First-time search settings from a freshly imported resume."""
-    clean = lambda t: re.sub(r"\s*\(.*?\)|/.*$", "", t).strip()
-    titles = list(dict.fromkeys(clean(e["title"]) for e in resume["experience"] if e.get("title")))[:4]
+    clean = lambda t: re.sub(r"\s*\(.*?\)|/.*$|\s*[·|–—].*$", "", t).strip()
+    skip = [w.lower() for w in cfg.get("exclude_title", [])]
+    titles = list(dict.fromkeys(clean(e["title"]) for e in resume["experience"]
+                                if e.get("title") and not any(re.search(rf"\b{re.escape(w)}\b", e["title"], re.I) for w in skip)))[:4]
     if titles:
         cfg["queries"] = list(dict.fromkeys(titles + [clean(h) for h in resume.get("headlines", {}).values() if h and len(h) < 60][:2]))
     loc = resume.get("contact", {}).get("location", "")
