@@ -98,10 +98,15 @@ def key_queries(cfg, n):
 
 def query_words(cfg, n=8):
     stop = {"manager", "senior", "lead", "head", "of", "and", "the", "director", "specialist", "in", "for", "remote"}
+    # level words say how senior, not what the job is: "Project Coordinator" must not let in "Shipping Coordinator"
+    level = {"coordinator", "associate", "junior", "jr", "assistant", "administrator", "officer", "intern", "sr",
+             "principal", "staff", "entry", "level", "trainee", "executive", "consultant"}
     words = []
     for q in cfg.get("queries", []):
-        for w in re.findall(r"[a-z][a-z-]{2,}", q.lower()):
-            if w not in stop and w not in words:
+        found = [w for w in re.findall(r"[a-z][a-z-]{2,}", q.lower()) if w not in stop]
+        topic = [w for w in found if w not in level] or found  # a title made only of level words keeps them
+        for w in topic:
+            if w not in words:
                 words.append(w)
     return words[:n]
 
