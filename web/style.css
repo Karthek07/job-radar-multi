@@ -565,3 +565,5 @@ details.card > summary { cursor: pointer; }
 .allview .search { align-items: center; }
 .allview .search input { flex: 1; }
 .allview .joblist { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); margin-top: 6px; }
+.tag.closed { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad); font-weight: 600; }
+.closed-note { color: var(--bad); }

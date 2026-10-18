@@ -31,6 +31,7 @@ import render  # noqa: E402
 import sources  # noqa: E402
 from score import score  # noqa: E402
 import importer  # noqa: E402
+import liveness  # noqa: E402
 import tailor as tailor_mod  # noqa: E402
 from tailor import ai_available, all_skills, interview_prep, keyword_tailor, tailor  # noqa: E402
 from util import classify_location, geocache, geocode, job_id, load_geocache, norm, now_iso, safe_url  # noqa: E402
@@ -349,6 +350,16 @@ def main(argv=None):
             if old.get("manual") or (res and res[0] >= cfg["min_score_to_save"]):
                 merged[jid] = old
 
+    # ---- postings that have closed (aggregators keep listing them): drop before tailoring
+    live_cache = load(os.path.join(DATA, "liveness.json"), {})
+    live_note = ""
+    if not args.requests_only and not args.fixtures and cfg.get("filters", {}).get("check_closed", True):
+        tracked = {k for k, v in status_of.items() if v in TRACKED}
+        n_checked, gone = liveness.check_jobs(merged, tracked, live_cache, budget=cfg.get("max_closed_checks", 150))
+        live_note = f"{n_checked} links checked, {len(gone)} closed postings removed"
+        print(f"closed check: {live_note}")
+        save(os.path.join(DATA, "liveness.json"), live_cache)
+
     # ---- tailoring
     os.makedirs(RES_DIR, exist_ok=True)
     have_ai = ai_available() and not args.no_claude
@@ -504,7 +515,8 @@ def main(argv=None):
         save(os.path.join(DATA, "history.json"), hist[-120:])
         save(os.path.join(DATA, "report.json"), {"updated": started, "raw": len(raw), "passed": kept, "unique": len(best),
                                                  "new": new_count, "tailored_this_run": done, "ai_used_today": run_state.get("ai_used", 0),
-                                                 "ai_enabled": have_ai, "ai_error": tailor_mod.AI_ERROR["msg"], "sources": report})
+                                                 "ai_enabled": have_ai, "ai_error": tailor_mod.AI_ERROR["msg"], "closed_check": live_note,
+                                                 "sources": report})
     print(f"done: {len(jobs)} jobs listed, {new_count} new, {done} tailored, {prep_done} prep, {len(reqs)} requests")
 
 

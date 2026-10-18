@@ -469,6 +469,7 @@ function JobList({ jobs, statuses, sel, setSel, counts, onAdd, file, loading, re
             <div class="tags">
               ${PIPE.includes(st(j)) ? html`<span class=${"tag st-" + st(j)}>${LABEL[st(j)]}</span>` : null}
               <${AppliedTag} list=${cross.applied[j.id]} names=${names} />
+              ${j.closed ? html`<span class="tag closed" title=${j.closed}>Posting closed</span>` : null}
               ${cross.hidden.has(j.id) ? html`<span class="tag other-profile">In ${names[cross.owner[j.id]] || cross.owner[j.id]}</span>` : null}
               ${newIds.has(j.id) ? html`<span class="tag new">New</span>` : null}
               ${j.manual ? html`<span class="tag">Added by you</span>` : null}
@@ -561,7 +562,9 @@ function Detail({ job, resume, base, statuses, setStatus, say, setSel, cross, na
       <button class="btn" onClick=${() => setEditing(!editing)}>${editing ? "Done editing" : "Edit resume and cover letter"}</button>
       <button class="btn" onClick=${downloadPdf}>Download PDF</button>
       ${safeUrl(job.url) || safeUrl(job.apply_url) ? html`<a class="btn" href=${safeUrl(job.url) || safeUrl(job.apply_url)} target="_blank" rel="noopener noreferrer">Open posting</a>` : null}
+      ${st !== "hidden" ? html`<button class="btn" onClick=${() => { setStatus(job.id, "hidden", "Posting closed"); say("Hidden. Each search also checks links and drops closed postings by itself."); setSel(null); }}>Posting closed? Hide it</button>` : null}
     </div>
+    ${job.closed ? html`<p class="hint closed-note">This posting looks closed (${job.closed}). It stays here because you're tracking it.</p>` : null}
     <p class="hint">Apply now downloads this resume${dirty ? " with your edits" : ""}, copies the cover letter and opens the application. With the Chrome extension, the form fills itself; you check it and submit.</p>
 
     <${AppliedBlock} job=${job} list=${cross?.applied[job.id] || []} names=${names || {}} owner=${cross?.owner[job.id]} profile=${profile} exclusive=${exclusive} />
