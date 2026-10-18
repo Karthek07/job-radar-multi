@@ -214,13 +214,13 @@ class MainVM(app: Application) : AndroidViewModel(app) {
 
     /** Applications you sent before Job Radar (or from another device), so every job at those companies shows it. */
     fun addApplication(company: String, title: String, date: String, profileId: String, status: String = Status.APPLIED) {
-        val a = Application("m" + System.currentTimeMillis().toString(36), company.trim(), Company.key(company), title.trim(), profileId, date, status, "", "manual")
+        val a = JobApplication("m" + System.currentTimeMillis().toString(36), company.trim(), Company.key(company), title.trim(), profileId, date, status, "", "manual")
         changeApplications("app: add application ${a.company}") { it + a }
     }
 
     fun deleteApplication(id: String) = changeApplications("app: remove application") { list -> list.filter { it.id != id } }
 
-    private fun changeApplications(msg: String, change: (List<Application>) -> List<Application>) {
+    private fun changeApplications(msg: String, change: (List<JobApplication>) -> List<JobApplication>) {
         applications = change(applications)
         val prev = appQueue
         appQueue = viewModelScope.launch {
@@ -287,7 +287,7 @@ class MainVM(app: Application) : AndroidViewModel(app) {
             changeApplications("app: ${if (isIn) Status.label(s).lowercase() else "untrack"} ${job.company}") { list ->
                 val keep = list.filter { it.id != key }
                 if (!isIn) keep
-                else keep + Application(key, job.company, Company.key(job.company), job.title, me,
+                else keep + JobApplication(key, job.company, Company.key(job.company), job.title, me,
                     list.firstOrNull { it.id == key }?.date?.takeIf { wasIn } ?: java.time.LocalDate.now().toString(), s!!, job.id, "app")
             }
         }

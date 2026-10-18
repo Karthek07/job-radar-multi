@@ -132,7 +132,7 @@ data class ProfilesFile(
 fun rootOf(id: String) = if (id == "main") "" else "profiles/$id"
 
 @Serializable
-data class Application(
+data class JobApplication(
     val id: String = "",
     val company: String = "",
     @SerialName("company_key") val companyKey: String = "",
@@ -145,13 +145,13 @@ data class Application(
 )
 
 @Serializable
-data class ApplicationsFile(val applications: List<Application> = emptyList())
+data class ApplicationsFile(val applications: List<JobApplication> = emptyList())
 
 @Serializable
-data class AppliedIndex(val companies: Map<String, List<Application>> = emptyMap())
+data class AppliedIndex(val companies: Map<String, List<JobApplication>> = emptyMap())
 
 /** One application, from the app log ([fromLog]) or found by the engine in a profile's tracker. */
-data class Applied(val key: String, val a: Application, val fromLog: Boolean)
+data class Applied(val key: String, val a: JobApplication, val fromLog: Boolean)
 
 /** Company names compared the same way as engine/profiles.py and web/profiles.js. */
 object Company {
@@ -178,10 +178,10 @@ object Company {
     }
 
     /** Everything you applied to, newest first, one entry per application. */
-    fun merge(log: List<Application>, index: AppliedIndex?): List<Applied> {
+    fun merge(log: List<JobApplication>, index: AppliedIndex?): List<Applied> {
         val seen = mutableSetOf<String>()
         val out = mutableListOf<Applied>()
-        fun add(a: Application, fromLog: Boolean) {
+        fun add(a: JobApplication, fromLog: Boolean) {
             val k = key(a.company).ifBlank { a.companyKey }
             val t = norm(a.title)
             if (k.isBlank() || t.isBlank()) return

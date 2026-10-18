@@ -264,13 +264,13 @@ class Repo(private val ctx: Context) {
         return clean
     }
 
-    fun cachedApplications(): List<Application> = try {
+    fun cachedApplications(): List<JobApplication> = try {
         json.decodeFromString(ApplicationsFile.serializer(), File(ctx.filesDir, "applications.json").readText()).applications
     } catch (e: Exception) {
         emptyList()
     }
 
-    suspend fun loadApplications(): List<Application> {
+    suspend fun loadApplications(): List<JobApplication> {
         val list = try {
             json.decodeFromString(ApplicationsFile.serializer(), fetchShared("applications.json").decodeToString()).applications
         } catch (e: GitHubError) {
@@ -281,7 +281,7 @@ class Repo(private val ctx: Context) {
     }
 
     /** Read the newest copy, change it, write it back, so the phone and the browser don't overwrite each other. */
-    suspend fun mutateApplications(message: String, change: (List<Application>) -> List<Application>): List<Application> {
+    suspend fun mutateApplications(message: String, change: (List<JobApplication>) -> List<JobApplication>): List<JobApplication> {
         val cur = loadApplications()
         val next = change(cur)
         if (next == cur) return cur
