@@ -9,16 +9,21 @@ job is listed or tailored, its apply link is opened and the job is dropped only 
 Anything unclear (blocked, timeout, login wall) counts as still open. Results are cached in data/liveness.json:
 closed jobs stay closed, open ones are checked again after a day.
 """
+import html as htmllib
 import json
 import re
+import threading
+import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urljoin, urlparse
 
 import requests
 
 import pagefetch
 
+VERSION = 2  # bump when the rules change, so earlier answers are re-checked
 CLOSED_RX = re.compile("|".join([
     r"no longer (?:available|accepting|active|open|posted|listed)",
     r"(?:position|role|job|vacancy|opening|requisition) (?:has been|was|is) (?:filled|closed|removed|expired|cancell?ed)",
@@ -33,17 +38,35 @@ CLOSED_RX = re.compile("|".join([
 ]), re.I)
 
 CAREERS_HOME = re.compile(r"^/?(?:[a-z]{2}(?:-[a-z]{2})?/)?(?:careers?|jobs?|search|job-search|opportunities|en|fr)?/?$", re.I)
+# query parameters that don't change which page you're on (tracking), and ones that mean "that job isn't here"
+IGNORED_QUERY = re.compile(r"^(utm_.*|gh_src|gh_jid|source|src|ref|referrer|lang|locale|error|from_.*)$", re.I)
+ERROR_QUERY = {"error": {"true", "1", "notfound", "not_found", "job_not_found"}}
+AGGREGATOR_DETAILS = re.compile(r"(^|\.)adzuna\.[a-z.]+$", re.I)
+LAND_LINK = re.compile(r'href="([^"]*/land/ad/\d+[^"]*)"', re.I)
+_host_locks = defaultdict(lambda: threading.Semaphore(2))  # at most 2 requests at a time per site, so nobody rate-limits us
 JOB_ID = re.compile(r"\d{5,}|[0-9a-f]{8}-[0-9a-f]{4}-|/jobs?/[^/?#]{6,}|/(?:ad|land|job|posting|req|requisition|details?)/", re.I)
+
+
+def _request(url):
+    host = urlparse(url).netloc.lower()
+    with _host_locks[host]:
+        for attempt in range(2):
+            r = requests.get(url, headers={"User-Agent": pagefetch.UA, "Accept-Language": "en-CA,en;q=0.9"},
+                             timeout=15, allow_redirects=False)
+            if r.status_code in (403, 429) and attempt == 0:
+                time.sleep(3)  # busy or rate-limited: one polite retry
+                continue
+            time.sleep(0.4)
+            return r
 
 
 def _get(url):
     """Follow redirects one hop at a time (only to public addresses). Returns (final_url, status, html) or None."""
     try:
-        for _ in range(6):
+        for _ in range(8):
             if not pagefetch._public(url):
                 return None
-            r = requests.get(url, headers={"User-Agent": pagefetch.UA, "Accept-Language": "en-CA,en;q=0.9"},
-                             timeout=15, allow_redirects=False)
+            r = _request(url)
             if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
                 url = urljoin(url, r.headers["Location"])
                 continue
@@ -77,6 +100,26 @@ def check(url, now=None):
     if got is None:
         return "unknown", "couldn't open the link"
     final, status, html = got
+    # an aggregator's own copy of the ad stays up after the employer closes the job: follow its Apply link instead
+    start_u = urlparse(url)
+    if status == 200 and AGGREGATOR_DETAILS.search(urlparse(final).netloc) and "/details/" in urlparse(final).path:
+        m = LAND_LINK.search(html)
+        if not m:
+            if CLOSED_RX.search(pagefetch.strip_html(html)[:20000]):
+                return "closed", "the job board says the ad has ended"
+            return "unknown", "no apply link on the job board's page"
+        url = urljoin(final, htmllib.unescape(m.group(1)))
+        start_u = urlparse(url)
+        got = _get(url)
+        if got is None:
+            return "unknown", "couldn't open the employer's link"
+        final, status, html = got
+        if AGGREGATOR_DETAILS.search(urlparse(final).netloc) and status == 200 and re.search(r"cannot find page|page not found", html, re.I):
+            return "closed", "the job board's apply link no longer works"
+    end_q = dict(parse_qsl(urlparse(final).query))
+    for k, bad in ERROR_QUERY.items():
+        if str(end_q.get(k, "")).lower() in bad:
+            return "closed", "the employer's job board says the job isn't available"
     if status in (404, 410):
         return "closed", f"the page answers {status}"
     if status != 200:
@@ -91,8 +134,9 @@ def check(url, now=None):
     m = CLOSED_RX.search(body)
     if m and not vt:  # a live posting with structured data wins over a stray phrase elsewhere on the page
         return "closed", f"page says \"{m.group(0)[:60]}\""
-    start, end = urlparse(url), urlparse(final)
-    if JOB_ID.search(start.path + "?" + start.query) and CAREERS_HOME.match(end.path) and not end.query and not vt:
+    start, end = start_u, urlparse(final)
+    meaningful_q = [k for k, _ in parse_qsl(end.query) if not IGNORED_QUERY.match(k)]
+    if JOB_ID.search(start.path + "?" + start.query) and CAREERS_HOME.match(end.path) and not meaningful_q and not vt:
         return "closed", "the job link now opens the general careers page"
     return "open", ""
 
@@ -104,7 +148,7 @@ def check_jobs(jobs, tracked, cache, budget=150, now=None, checker=check):
     closed = []
 
     def stale(e):
-        if not e:
+        if not e or e.get("v") != VERSION:  # checked with older rules: check again
             return True
         if e.get("state") == "closed":
             return False
@@ -118,7 +162,7 @@ def check_jobs(jobs, tracked, cache, budget=150, now=None, checker=check):
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         for jid, (state, reason) in pool.map(run, todo):
-            cache[jid] = {"state": state, "reason": reason, "at": now.isoformat()}
+            cache[jid] = {"state": state, "reason": reason, "at": now.isoformat(), "v": VERSION}
     for jid in list(jobs):
         e = cache.get(jid)
         if e and e.get("state") == "closed":
