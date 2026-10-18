@@ -142,7 +142,9 @@ def score(job, cfg):
         t_pts += 10
         reasons.append("Amazon role (ex-Amazon)")
     t_pts = min(t_pts, 32)
-    sen = [w for term, w in tt["seniority"].items() if _has(title, term)]
+    # a level word in your own target titles ("Project Coordinator", "Associate PM") is never a penalty
+    targets = [q.lower() for q in cfg.get("queries", [])]
+    sen = [w for term, w in tt["seniority"].items() if _has(title, term) and not (w < 0 and any(_has(q, term) for q in targets))]
     pos = [w for w in sen if w > 0]
     s_pts = (max(pos) if pos else 0) + sum(w for w in sen if w < 0)
     if s_pts >= 8:
