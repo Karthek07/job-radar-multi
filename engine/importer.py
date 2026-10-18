@@ -42,15 +42,50 @@ def extract_text(path):
         from pypdf import PdfReader
         return "\n".join((p.extract_text() or "") for p in PdfReader(path).pages)
     if low.endswith(".docx"):
-        from docx import Document
-        d = Document(path)
-        parts = [p.text for p in d.paragraphs]
-        for t in d.tables:
-            for row in t.rows:
-                parts.append(" | ".join(c.text for c in row.cells))
-        return "\n".join(parts)
+        return docx_text(path)
     with open(path, encoding="utf-8", errors="ignore") as fh:
         return fh.read()
+
+
+def docx_text(path):
+    """Every paragraph in reading order, including ones inside text boxes and shapes (many resume templates put
+    their section headings there) and tables. Word stores a fallback copy of each shape; that copy is skipped."""
+    from docx import Document
+    from docx.oxml.ns import qn
+    MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+    body = Document(path).element.body
+    out = []
+
+    def own_text(p):
+        bits = []
+        for el in p.iter():
+            if el is not p and el.tag == qn("w:p"):
+                continue
+            anc = el.getparent()
+            skip = False
+            while anc is not None and anc is not p:  # text of nested paragraphs / fallback copies belongs elsewhere
+                if anc.tag == qn("w:p") or anc.tag == MC + "Fallback":
+                    skip = True
+                    break
+                anc = anc.getparent()
+            if skip:
+                continue
+            if el.tag == qn("w:t") and el.text:
+                bits.append(el.text)
+            elif el.tag in (qn("w:tab"), qn("w:br")):
+                bits.append("\t" if el.tag == qn("w:tab") else "\n")
+        return "".join(bits)
+
+    for p in body.iter(qn("w:p")):
+        anc, fallback = p.getparent(), False
+        while anc is not None:
+            if anc.tag == MC + "Fallback":
+                fallback = True
+                break
+            anc = anc.getparent()
+        if not fallback:
+            out.append(own_text(p))
+    return "\n".join(out)
 
 
 def ai_import(text, cfg):
@@ -68,7 +103,7 @@ def ai_import(text, cfg):
 SECTION_WORDS = ("summary", "profile", "personal profile", "professional summary", "about me", "objective", "experience",
                  "work experience", "professional experience", "employment", "employment history", "education", "skills",
                  "technical skills", "core skills", "key skills", "tools", "tools worked on", "certification", "certifications",
-                 "licenses", "projects", "achievements", "awards")
+                 "licenses", "projects", "achievements", "key achievements", "career highlights", "highlights", "awards")
 SECTION_RX = re.compile(r"^\s*(" + "|".join(sorted(map(re.escape, SECTION_WORDS), key=len, reverse=True)) + r")\b.{0,30}$", re.I)
 
 
@@ -108,7 +143,10 @@ def heuristic_import(text):
         return []
 
     summary = " ".join(BULLET.sub("", l) for l in sec("summary", "profile", "personal profile", "professional summary", "about", "objective"))
-    skills = [BULLET.sub("", s).strip() for l in sec("skills", "technical skills", "core skills", "key skills", "tools") for s in re.split(r"[,|;]", l)]
+    # "Label:<tab>a, b, c" lines (skill tables) keep the values, not the label
+    skill_lines = [re.sub(r"^[^:]{2,40}:\s*", "", l) for l in sec("skills", "technical skills", "core skills", "key skills", "tools")]
+    skills = [BULLET.sub("", s).strip() for l in skill_lines for s in re.split(r"[,|;]|\s{2,}|\t", l)]
+    skills = [re.sub(r"\s+[A-Z][\w &/]+:$", "", s).strip() for s in skills]  # "milestone tracking Issue Management:"
     skills = [s for s in skills if 1 < len(s) < 60]
     certs = [BULLET.sub("", l).strip() for l in sec("certification", "licenses")]
 
@@ -122,9 +160,17 @@ def heuristic_import(text):
             prev = exp[i - 1] if i > 0 and not BULLET.match(exp[i - 1]) and not DATES.search(exp[i - 1]) else ""
             if role and prev and role["bullets"] and role["bullets"][-1] == BULLET.sub("", prev).strip():
                 role["bullets"].pop()  # that line was this role's title, not the last role's bullet
-            title, company = (prev, head) if prev else (head, "")
+            split = re.split(r"\s+[—–|@]\s+|\s+-\s+|\s+at\s+", head, maxsplit=1)
+            if len(split) == 2 and all(x.strip() for x in split):
+                title, company = split[0].strip(), split[1].strip()  # "Title — Company   dates" on one line
+                if role and prev and role["bullets"] and role["bullets"][-1] == BULLET.sub("", prev).strip():
+                    role["bullets"].append(BULLET.sub("", prev).strip())  # undo: prev really was a bullet
+            else:
+                title, company = (prev, head) if prev else (head, "")
             role = {"title": title, "company": company, "location": "", "start": d.group(1), "end": d.group(2).title(), "bullets": []}
             roles.append(role)
+        elif role and l.count(" · ") >= 3:
+            continue  # "Hybrid · Canada · Team: 8–12 · Jira" style detail line, not an achievement
         elif role and not nxt_has_date and len(l) > 25:
             role["bullets"].append(BULLET.sub("", l).strip())
         elif role and not nxt_has_date and role["bullets"] and len(l) <= 25 and not BULLET.match(l):
@@ -137,7 +183,13 @@ def heuristic_import(text):
                            "core": r["bullets"][:2], "flex": [{"text": b, "tags": []} for b in r["bullets"][2:]]})
     first_title = experience[0]["title"] if experience else ""
     location = ""
+    PROV = {"ontario": "ON", "quebec": "QC", "british columbia": "BC", "alberta": "AB", "manitoba": "MB", "saskatchewan": "SK",
+            "nova scotia": "NS", "new brunswick": "NB", "newfoundland and labrador": "NL", "prince edward island": "PE"}
     for l in lines[1:6]:
+        m = re.search(r"([A-Z][A-Za-z .'-]+?),\s*(" + "|".join(p.title() for p in PROV) + r")\b", l)
+        if m:
+            location = f"{m.group(1).split('|')[-1].strip()}, {PROV[m.group(2).lower()]}"
+            break
         m = re.search(r"([A-Z][A-Za-z .'-]+),\s*([A-Z]\d[A-Z]\s?\d[A-Z]\d)", l)  # Canadian postal code
         if m:
             location = f"{m.group(1).split(',')[-1].strip()}, Canada"
@@ -148,12 +200,21 @@ def heuristic_import(text):
             break
     education = []
     for l in [re.sub(r"\s+", " ", x).strip() for x in sec("education")]:
+        if re.match(r"(?i)relevant|courses|modules|gpa", l):
+            continue
         d = DATES.search(l)
-        if d and education and not education[-1]["dates"]:
-            education[-1]["school"] = DATES.sub("", l).strip(" |,–-")
-            education[-1]["dates"] = f"{d.group(1)} – {d.group(2).title()}"
-        elif not re.match(r"(?i)relevant|courses|modules|gpa", l) and len(education) < 6:
-            education.append({"credential": BULLET.sub("", l), "school": "", "dates": ""})
+        txt = BULLET.sub("", DATES.sub("", l)).strip(" |,–-")
+        last = education[-1] if education else None
+        if d:
+            dates = f"{d.group(1)} – {d.group(2).title()}"
+            if last and not last["dates"] and not last["school"]:  # "Credential" then "School  dates"
+                last["school"], last["dates"] = txt, dates
+            elif len(education) < 6:  # "Credential  dates" then "School"
+                education.append({"credential": txt, "school": "", "dates": dates})
+        elif last and not last["school"]:
+            last["school"] = txt
+        elif len(education) < 6:
+            education.append({"credential": txt, "school": "", "dates": ""})
     return {
         "contact": {"name": name.title() if name.isupper() else name, "display_name": name.upper(), "location": location,
                     "phone": phone_m.group(1).strip() if phone_m else "", "email": email or "",
