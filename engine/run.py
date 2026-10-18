@@ -232,6 +232,14 @@ def main(argv=None):
     locs = cfg.setdefault("locations", {})
     if not locs.get("search_locations") and resume.get("contact", {}).get("location"):
         locs["search_locations"] = [{"place": resume["contact"]["location"], "radius_km": 50}]
+    # no companies of your own yet: check the employers Job Radar ships with (Greenhouse, Lever, Ashby... career boards)
+    ats = cfg.setdefault("ats_companies", {})
+    if not ats.get("candidates"):
+        shipped = load(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profile", "companies_default.json"), {})
+        ats["candidates"] = list(shipped.get("ats_candidates", []))
+        wd = cfg.setdefault("workday_sites", {})
+        if not wd.get("urls"):
+            wd["urls"] = list(shipped.get("workday_urls", shipped.get("workday_sites", [])))
     cfg["_ex_amazon"] = any("amazon" in (e.get("company") or "").lower() for e in resume.get("experience", []))
     if not cfg.get("title_terms", {}).get("required") or not cfg.get("title_terms", {}).get("weighted"):
         words = sources.query_words(cfg, 12)
