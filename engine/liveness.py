@@ -23,7 +23,7 @@ import requests
 
 import pagefetch
 
-VERSION = 2  # bump when the rules change, so earlier answers are re-checked
+VERSION = 3  # bump when the rules change, so earlier answers are re-checked
 CLOSED_RX = re.compile("|".join([
     r"no longer (?:available|accepting|active|open|posted|listed)",
     r"(?:position|role|job|vacancy|opening|requisition) (?:has been|was|is) (?:filled|closed|removed|expired|cancell?ed)",
@@ -105,17 +105,17 @@ def check(url, now=None):
     if status == 200 and AGGREGATOR_DETAILS.search(urlparse(final).netloc) and "/details/" in urlparse(final).path:
         m = LAND_LINK.search(html)
         if not m:
-            if CLOSED_RX.search(pagefetch.strip_html(html)[:20000]):
-                return "closed", "the job board says the ad has ended"
+            # job boards often show automated visitors a different page: their own wording is never proof
             return "unknown", "no apply link on the job board's page"
+        board = urlparse(final).netloc.lower()
         url = urljoin(final, htmllib.unescape(m.group(1)))
         start_u = urlparse(url)
         got = _get(url)
         if got is None:
             return "unknown", "couldn't open the employer's link"
         final, status, html = got
-        if AGGREGATOR_DETAILS.search(urlparse(final).netloc) and status == 200 and re.search(r"cannot find page|page not found", html, re.I):
-            return "closed", "the job board's apply link no longer works"
+        if urlparse(final).netloc.lower() == board:
+            return "unknown", "the job board didn't pass us on to the employer"
     end_q = dict(parse_qsl(urlparse(final).query))
     for k, bad in ERROR_QUERY.items():
         if str(end_q.get(k, "")).lower() in bad:
