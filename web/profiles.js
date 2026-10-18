@@ -3,9 +3,9 @@
 //   profiles.json               { profiles: [{id, name}], exclusive_companies }
 //   applications.json           { applications: [{id, company, company_key, title, profile, date, status, job_id, source}] }
 //   shared/applied_index.json   written by the engine: the same, plus everything found in each profile's tracker
-import { html, useState, useMemo } from "./vendor/preact-htm.js";
+import { html, useState, useMemo, useEffect } from "./vendor/preact-htm.js";
 import gh from "./backend.js";
-import { PIPE, LABEL, clone, lines } from "./ui.js";
+import { PIPE, LABEL, clone, lines, Ring, age, store, restore } from "./ui.js";
 
 // ------------------------------------------------------------------ company names (same rules as engine/profiles.py)
 
@@ -155,13 +155,103 @@ export function AppliedBlock({ job, list, names, owner, profile, exclusive }) {
   </div>`;
 }
 
-export function ProfileSwitcher({ cfg, current, onSwitch, onManage }) {
+// ------------------------------------------------------------------ profile colours (same order as the Profiles page)
+
+const PCOLORS = ["#0F766E", "#7C3AED", "#C2410C", "#1D4ED8", "#BE185D", "#4D7C0F", "#A16207", "#0E7490"];
+export const colorOf = (cfg, id) => PCOLORS[Math.max(0, (cfg?.profiles || []).findIndex((p) => p.id === id)) % PCOLORS.length];
+
+/** A small coloured label with the profile's name, so jobs from different profiles are easy to tell apart. */
+export function ProfileTag({ cfg, id, names }) {
+  return html`<span class="ptag" style=${`--pc:${colorOf(cfg, id)}`}>${names?.[id] || id}</span>`;
+}
+
+export function ProfileSwitcher({ cfg, current, all, onSwitch, onAll, onManage }) {
   if (!cfg) return null;
-  return html`<label class="pswitch"><span class="sr">Profile</span>
-    <select aria-label="Profile" value=${current} onChange=${(e) => (e.target.value === "__manage" ? (e.target.value = current, onManage()) : onSwitch(e.target.value))}>
+  const multi = cfg.profiles.length > 1;
+  const value = all && multi ? "__all" : current;
+  return html`<label class="pswitch" style=${`--pc:${all && multi ? "#E9A23B" : colorOf(cfg, current)}`}><span class="sr">Profile</span>
+    <select aria-label="Profile" value=${value} onChange=${(e) => {
+      const v = e.target.value;
+      if (v === "__manage") { e.target.value = value; onManage(); } else if (v === "__all") onAll(); else onSwitch(v);
+    }}>
+      ${multi ? html`<option value="__all">All profiles</option>` : null}
       ${cfg.profiles.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
       <option value="__manage">Manage profiles…</option>
     </select></label>`;
+}
+
+// ------------------------------------------------------------------ every profile's jobs in one list
+
+/** Jobs from all profiles together, each tagged with its profile, with a chip per profile to show or hide it. */
+export function AllJobs({ cfg, entries, exclusive, names, onOpen, refreshKey }) {
+  const [data, setData] = useState(null);
+  const [off, setOff] = useState(restore("jr.all.off", []));
+  const [tab, setTab] = useState(restore("jr.all.tab", "inbox"));
+  const [q, setQ] = useState("");
+  const [fresh, setFresh] = useState(false);
+  useEffect(() => store("jr.all.off", off), [off]);
+  useEffect(() => store("jr.all.tab", tab), [tab]);
+  useEffect(() => {
+    let live = true;
+    Promise.all(cfg.profiles.map(async (p) => {
+      const pre = p.id === "main" ? "" : `profiles/${p.id}/`;
+      const [f, st] = await Promise.all([gh.shared.json(`${pre}data/jobs.json`).catch(() => ({ jobs: [] })),
+        gh.shared.json(`${pre}user/state.json`).catch(() => ({ statuses: {} }))]);
+      // what this browser changed in the last few seconds may not be saved yet: prefer the local copy when newer
+      const local = restore(p.id === "main" ? "jr.status" : `jr.status@${p.id}`, {});
+      const statuses = { ...(st.statuses || {}) };
+      for (const [k, v] of Object.entries(local)) if (!statuses[k] || (v.at || 0) > (statuses[k].at || 0)) statuses[k] = v;
+      return [p.id, { jobs: f.jobs || [], statuses }];
+    })).then((x) => { if (live) setData(Object.fromEntries(x)); });
+    return () => { live = false; };
+  }, [cfg, refreshKey]);
+
+  const ids = new Set(cfg.profiles.map((p) => p.id));
+  const rows = [];
+  for (const [pid, d] of Object.entries(data || {})) {
+    for (const j of d.jobs) {
+      const st = d.statuses[j.id]?.status;
+      const owner = ownerOf(j, entries, pid, ids);
+      if (exclusive && owner !== pid && !st) continue; // shown once, in the profile that owns the company
+      rows.push({ pid, j, st, applied: appliedFor(j, entries, pid) });
+    }
+  }
+  const inTab = (r) => (tab === "inbox" ? !r.st : tab === "saved" ? r.st === "saved" : PIPE.includes(r.st));
+  const count = (pid) => rows.filter((r) => r.pid === pid && inTab(r)).length;
+  let list = rows.filter((r) => inTab(r) && !off.includes(r.pid));
+  if (fresh) list = list.filter((r) => !r.applied.length);
+  if (q.trim()) { const s = q.trim().toLowerCase(); list = list.filter((r) => `${r.j.title} ${r.j.company}`.toLowerCase().includes(s)); }
+  list.sort((a, b) => b.j.score - a.j.score);
+  const toggle = (pid) => setOff(off.includes(pid) ? off.filter((x) => x !== pid) : [...off, pid]);
+
+  return html`<section class="page allview" aria-label="Jobs from all profiles">
+    <div class="row"><h2>All profiles</h2><span class="spacer"></span>
+      <span class="hint">${data ? `${list.length} shown` : "Loading every profile…"}</span></div>
+    <p class="hint">Each job carries its profile's colour. Tap a profile to show or hide its jobs; open a job to apply with that profile's resume.${exclusive ? " No overlap is on, so each company appears once." : ""}</p>
+    <div class="chips pchips">${cfg.profiles.map((p) => html`<button class="chip pchip" style=${`--pc:${colorOf(cfg, p.id)}`}
+      aria-pressed=${!off.includes(p.id)} onClick=${() => toggle(p.id)}><span class="dot"></span>${p.name} <b>${data ? count(p.id) : "…"}</b></button>`)}</div>
+    <div class="search" style="margin:10px 0">
+      <input aria-label="Search title or company" placeholder="Title or company" value=${q} onInput=${(e) => setQ(e.target.value)} />
+      <button class="chip" aria-pressed=${fresh} onClick=${() => setFresh(!fresh)}>New companies only</button></div>
+    <div class="tabs" role="tablist">${[["inbox", "Inbox"], ["saved", "Saved"], ["applied", "Applied"]].map(([k, l]) =>
+      html`<button role="tab" aria-selected=${tab === k} onClick=${() => setTab(k)}>${l}</button>`)}</div>
+    <div class="joblist">${!data ? null : list.length === 0 ? html`<div class="empty">Nothing here with these filters.</div>` :
+      list.map((r) => html`<button class="jobrow pcolored" style=${`--pc:${colorOf(cfg, r.pid)}`} onClick=${() => onOpen(r.pid, r.j.id)}>
+        <${Ring} score=${r.j.score} />
+        <div>
+          <div class="t">${r.j.title}</div>
+          <div class="m">${r.j.company}${r.j.location ? `, ${r.j.location}` : ""}</div>
+          <div class="tags">
+            <${ProfileTag} cfg=${cfg} id=${r.pid} names=${names} />
+            ${PIPE.includes(r.st) ? html`<span class=${"tag st-" + r.st}>${LABEL[r.st]}</span>` : null}
+            <${AppliedTag} list=${r.applied} names=${names} />
+            ${r.j.resume_pdf ? html`<span class="tag ready">${r.j.tailor_method === "claude" ? "AI resume" : "Resume ready"}</span>` : null}
+            ${r.j.remote ? html`<span class="tag">Remote</span>` : null}
+          </div>
+        </div>
+        <span class="age">${age(r.j)}</span>
+      </button>`)}</div>
+  </section>`;
 }
 
 // ------------------------------------------------------------------ Profiles page

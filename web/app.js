@@ -8,7 +8,7 @@ import { Home, Tracker, Documents, Insights, PlanPage, AdminPage } from "./pages
 import { Coverage, UsagePage } from "./dash.js";
 import { planById } from "./plans.js";
 import { rootOf, loadProfiles, cleanProfiles, loadApplications, loadEngineIndex, mutateApplications, mergeApplied, appliedFor, ownerOf, entryFor,
-  AppliedTag, AppliedBlock, ProfileSwitcher, ProfilesPage, HistoryPage } from "./profiles.js";
+  AppliedTag, AppliedBlock, ProfileSwitcher, ProfilesPage, HistoryPage, AllJobs, ProfileTag } from "./profiles.js";
 
 // which profile this browser is looking at; its folder is set before anything loads
 const startProfile = gh.profilesSupported ? restore("jr.profile", "main") : "main";
@@ -23,6 +23,8 @@ function App() {
   const [route, setRouteRaw] = useState(routeFromHash() || restore("jr.route", "home"));
   const [run, setRun] = useState(null);
   const [profile, setProfile] = useState(startProfile);
+  const [allView, setAllView] = useState(gh.profilesSupported && restore("jr.allview", false));
+  useEffect(() => store("jr.allview", allView), [allView]);
   const [cfg, setCfg] = useState(restore("jr.profiles", null));
   const [apps, setApps] = useState(restore("jr.apps", []));
   const [index, setIndex] = useState(null);
@@ -175,7 +177,7 @@ function App() {
   const name = resume?.contact?.name;
   const multi = (cfg?.profiles?.length || 0) > 1;
   const pname = cfg?.profiles?.find((p) => p.id === profile)?.name;
-  const title = (name ? `${name}'s Job Radar` : "Job Radar") + (multi && pname ? ` · ${pname}` : "");
+  const title = (name ? `${name}'s Job Radar` : "Job Radar") + (multi && allView ? " · All profiles" : multi && pname ? ` · ${pname}` : "");
   document.title = title;
   const needsResume = !resume || !(resume.experience || []).length;
   const jobs = file?.jobs || [];
@@ -198,7 +200,11 @@ function App() {
   })();
   const shown = jobs.filter((j) => !cross.hidden.has(j.id));
   const ctx = { file, jobs, resume, search, report, base, statuses, setStatus, say, refresh, loading, setRoute, setSel, setResume, setSearch, title, openJob, run,
-    searchNow: gh.mode === "azure" ? searchNow : null, profile, names, cross, exclusive, entries };
+    searchNow: gh.mode === "azure" ? searchNow : null, profile, names, cross, exclusive, entries, cfg };
+  const showAll = allView && (cfg?.profiles?.length || 0) > 1;
+  const pickProfile = (id) => { setAllView(false); if (id !== profile) switchProfile(id); else setRouteRaw("jobs"); };
+  // opening a job from the combined list switches to its profile, so Apply uses that profile's resume
+  const openFromAll = (pid, id) => { setAllView(false); if (pid !== profile) switchProfile(pid); setTimeout(() => { setSel(id); setRouteRaw("jobs"); }, 0); };
 
   const counts = {
     inbox: shown.filter((j) => !statuses[j.id]).length,
@@ -217,6 +223,8 @@ function App() {
     onChange=${() => loadApplications().then((a) => { setApps(a); store("jr.apps", a); })} />`;
   else if (needsResume && !["settings", "plan", "admin"].includes(current)) main = html`<${Onboard} ...${ctx} profileName=${cfg?.profiles?.length > 1 ? names[profile] : ""} />`;
   else if (current === "home") main = html`<${Home} ...${ctx} />`;
+  else if (current === "jobs" && showAll) main = html`<${AllJobs} cfg=${cfg} entries=${entries} exclusive=${exclusive} names=${names}
+      onOpen=${openFromAll} refreshKey=${file?.updated} />`;
   else if (current === "jobs") main = html`<div class=${"jobsview" + (job ? " has-detail" : "")}>
       <${JobList} ...${ctx} sel=${sel} counts=${counts} onAdd=${() => setAdding(true)} />
       <div class="detailpane">${job ? html`<${Detail} key=${job.id} job=${job} ...${ctx} />`
@@ -240,7 +248,8 @@ function App() {
       <div class="appbar-top">
         <button class="wordmark" onClick=${() => setRoute("home")} aria-label="Home"><img src="icon.svg" alt="" width="28" height="28" />
           <span><b class="long">${title}</b><b class="short">${name ? `${name.split(" ")[0]}'s Job Radar` : "Job Radar"}</b><small>${searched}</small></span></button>
-        ${gh.profilesSupported ? html`<${ProfileSwitcher} cfg=${cfg || cleanProfiles(null)} current=${profile} onSwitch=${switchProfile} onManage=${() => setRoute("profiles")} />` : null}
+        ${gh.profilesSupported ? html`<${ProfileSwitcher} cfg=${cfg || cleanProfiles(null)} current=${profile} all=${showAll} onSwitch=${pickProfile}
+          onAll=${() => { setAllView(true); setSel(null); setRoute("jobs"); }} onManage=${() => setRoute("profiles")} />` : null}
         <span class="spacer"></span>
         <button class="btn light small hide-s" onClick=${() => setAdding(true)}>Add a job</button>
         ${gh.mode === "azure" ? html`<button class="btn amber small" onClick=${searchNow}>Search now</button>`
@@ -397,7 +406,7 @@ function Onboard({ resume, say, refresh, file, profileName }) {
 
 // ------------------------------------------------------------------ job list
 
-function JobList({ jobs, statuses, sel, setSel, counts, onAdd, file, loading, refresh, search, cross, names, exclusive, profile }) {
+function JobList({ jobs, statuses, sel, setSel, counts, onAdd, file, loading, refresh, search, cross, names, exclusive, profile, cfg }) {
   const [peek, setPeek] = useState(false);
   useEffect(() => setPeek(false), [profile]);
   const [tab, setTab] = useState(restore("jr.tab", "inbox"));
@@ -426,7 +435,7 @@ function JobList({ jobs, statuses, sel, setSel, counts, onAdd, file, loading, re
 
   return html`<section class="listpane" aria-label="Jobs">
     <div class="listhead">
-      <div class="row"><h1>Jobs</h1><span class="spacer"></span>
+      <div class="row"><h1>Jobs</h1>${(cfg?.profiles?.length || 0) > 1 ? html`<${ProfileTag} cfg=${cfg} id=${profile} names=${names} />` : null}<span class="spacer"></span>
         <button class="btn small" onClick=${onAdd}>Add a job</button>
         <button class="btn small" onClick=${refresh}>${loading ? "…" : "Refresh"}</button></div>
       <div class="sub">${jobs.length} matches${file?.new_this_run ? `, ${file.new_this_run} new in the last search` : ""}</div>

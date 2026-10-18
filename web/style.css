@@ -550,3 +550,18 @@ details.card > summary { cursor: pointer; }
   .hrow { grid-template-columns: minmax(0, 1fr) auto; }
   .hrow > .hint:first-of-type { grid-column: 1 / -1; order: 3; }
 }
+
+/* ---------- profile colours and the all-profiles view */
+.pswitch select { box-shadow: inset 4px 0 0 var(--pc, transparent); }
+.ptag { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  color: var(--pc); background: color-mix(in srgb, var(--pc) 12%, transparent); border: 1px solid color-mix(in srgb, var(--pc) 35%, transparent); }
+.ptag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--pc); }
+.listhead .row h1 + .ptag { margin-left: 8px; }
+.jobrow.pcolored { box-shadow: inset 4px 0 0 var(--pc); }
+.pchips .pchip { display: inline-flex; align-items: center; gap: 6px; }
+.pchip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--pc); }
+.pchip[aria-pressed="true"] { background: color-mix(in srgb, var(--pc) 14%, var(--paper)); border-color: var(--pc); color: var(--ink); }
+.pchip[aria-pressed="false"] { opacity: .55; text-decoration: line-through; }
+.allview .search { align-items: center; }
+.allview .search input { flex: 1; }
+.allview .joblist { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); margin-top: 6px; }
